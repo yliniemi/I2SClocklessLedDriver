@@ -1,15 +1,10 @@
-/* library options
- *  ENABLE_HARDWARE_SCROLL : to enable the HARDWARE SCROLL. Attention wjhen enabled you can use the offset  but it could mean slow when using all the pins
- *  NUMSTRIPS add this before the #include of the library this will help with the speed of the buffer calculation
- *  USE_PIXELSLIB : to use tthe pixel lib library automatic functions
+
+
+/*
+ 
  */
 
-#ifndef __I2S_CLOCKLESS_DRIVER_H
-#define __I2S_CLOCKLESS_DRIVER_H
-
- 
 #pragma once
-
 
 #include "esp_heap_caps.h"
 #include "soc/soc.h"
@@ -27,9 +22,6 @@
 #include <stdio.h>
 #include <rom/ets_sys.h>
 #include "esp32-hal-log.h"
-#include "Math.h"
-
-
 
 #ifndef NUMSTRIPS
 #define NUMSTRIPS 16
@@ -60,68 +52,12 @@
 #include "hardwareSprite.h"
 #endif
 
-#ifdef COLOR_ORDER_GRBW
-#define _p_r 1
-#define _p_g 0
-#define _p_b 2
-#define _nb_components 4
-#else
-#ifdef COLOR_ORDER_RGBW
-#define _p_r 0
-#define _p_g 1
-#define _p_b 2
-#define _nb_components 3
-#else
-#ifdef  COLOR_ORDER_RGBW
-#define _p_r 0
-#define _p_g 2
-#define _p_b 1
-#define _nb_components 3
-#else
-#ifdef COLOR_ORDER_RGBW
-#define _p_r 2
-#define _p_g 0
-#define _p_b 1
-#define _nb_components 3
-#else
-#ifdef COLOR_ORDER_RGBW
-#define _p_r 2
-#define _p_g 1
-#define _p_b 0
-#define _nb_components 3
-#else
-#ifdef COLOR_ORDER_RGBW
-#define _p_r 1
-#define _p_g 2
-#define _p_b 0
-#define _nb_components 3
-#else
-#ifdef COLOR_ORDER_RGBW
-#define _p_r 1
-#define _p_g 0
-#define _p_b 2
-#define _nb_components 3
-#else
 
-#define _p_r 1
-#define _p_g 0
-#define _p_b 2
-#define _nb_components 3
-#endif
-#endif
-#endif
-#endif
-#endif
-#endif
-#endif
-
-#ifdef USE_PIXELSLIB
-#include "pixelslib.h"
-#else
-#include "___pixeltypes.h"
-#endif
-
-#define FULL_DMA_BUFFER
+struct Coordinates
+{
+    int x;
+    int y;
+};
 
 typedef union
 {
@@ -143,9 +79,13 @@ static void IRAM_ATTR transpose16x1_noinline2(unsigned char *A, uint16_t *B);
 #ifdef ENABLE_HARDWARE_SCROLL
 static void IRAM_ATTR loadAndTranspose(uint8_t *ledt, int led_per_strip, int num_stripst, OffsetDisplay offdisp, uint16_t *buffer, int ledtodisp, uint8_t *mapg, uint8_t *mapr, uint8_t *mapb, uint8_t *mapw, int nbcomponents, int pg, int pr, int pb);
 #else
+#ifdef ENABLE_LEDMAP
+static void IRAM_ATTR loadAndTranspose(uint8_t *ledt, int *sizes, int num_stripst, uint16_t *buffer, int ledtodisp, uint8_t *mapg, uint8_t *mapr, uint8_t *mapb, uint8_t *mapw, int nbcomponents, int pg, int pr, int pb, OffsetDisplay offdisp);
+// static void IRAM_ATTR loadAndTranspose(uint8_t *ledt, int *sizes, int num_stripst, uint16_t *buffer, int ledtodisp, uint8_t *mapg, uint8_t *mapr, uint8_t *mapb, uint8_t *mapw, int nbcomponents, int pg, int pr, int pb, Coordinates (*mapLed)(int), OffsetDisplay offdisp);
+#else
 static void IRAM_ATTR loadAndTranspose(uint8_t *ledt, int *sizes, int num_stripst, uint16_t *buffer, int ledtodisp, uint8_t *mapg, uint8_t *mapr, uint8_t *mapb, uint8_t *mapw, int nbcomponents, int pg, int pr, int pb);
 #endif
-
+#endif
 enum colorarrangment
 {
     ORDER_GRBW,
@@ -227,11 +167,12 @@ public:
     volatile xSemaphoreHandle I2SClocklessLedDriver_semDisp = NULL;
     volatile int dmaBufferActive = 0;
     volatile bool wait;
-    displayMode __displayMode;
+    displayMode __displayMode = WAIT;
     volatile int ledToDisplay;
     OffsetDisplay _offsetDisplay, _defaultOffsetDisplay;
     // volatile int oo=0;
-    uint8_t *leds,*saveleds;
+    uint8_t *leds;
+    uint8_t *_defaultLeds;
     int startleds;
     int linewidth;
     int dmaBufferCount = 2; //we use two buffers
@@ -239,7 +180,6 @@ public:
 
     volatile int num_strips;
     volatile int num_led_per_strip;
-    volatile uint16_t total_leds;
     //int clock_pin;
     int p_r, p_g, p_b;
     int i2s_base_pin_index;
@@ -251,8 +191,9 @@ public:
     volatile bool isDisplaying = false;
     volatile bool isWaiting = true;
     volatile bool framesync = false;
-    volatile bool wasWaitingtofinish = false;
     volatile int counti;
+    // Coordinates *ledMap = NULL;
+    Coordinates (*mapLed)(int) = NULL;
 
     I2SClocklessLedDriver(){};
     void setPins(int *Pins)
@@ -447,8 +388,9 @@ public:
         /*
          We wait for the display to be stopped before launching a new one
          */
-        
-         __displayMode = dispmode;
+        if (__displayMode == NO_WAIT && isDisplaying == true)
+            xSemaphoreTake(I2SClocklessLedDriver_semDisp, portMAX_DELAY);
+        __displayMode = dispmode;
         isWaiting = false;
         if (dispmode == LOOP or dispmode == LOOP_INTERUPT)
         {
@@ -457,10 +399,9 @@ public:
         transpose = false;
         i2sStart(DMABuffersTransposed[0]);
 
-        if (dispmode == WAIT)
+        if (__displayMode == WAIT)
         {
             isWaiting = true;
-            I2SClocklessLedDriver_sem=xSemaphoreCreateBinary();
             xSemaphoreTake(I2SClocklessLedDriver_sem, portMAX_DELAY);
         }
     }
@@ -495,22 +436,13 @@ public:
     }
     void showPixelsFirstTranspose(displayMode dispmode)
     {
-        
         if (leds == NULL)
         {
-           ESP_LOGE(TAG,"no led");
+            printf("no leds buffer defined");
             return;
-        }
-        if (__displayMode == NO_WAIT && isDisplaying == true)
-        {
-            if(I2SClocklessLedDriver_semDisp==NULL)
-         I2SClocklessLedDriver_semDisp= xSemaphoreCreateBinary();
-          xSemaphoreTake(I2SClocklessLedDriver_semDisp, portMAX_DELAY);
-
         }
         transposeAll();
         showPixelsFromBuffer(dispmode);
-       
     }
 
     void transposeAll()
@@ -543,28 +475,22 @@ public:
             #ifdef ENABLE_HARDWARE_SCROLL
             loadAndTranspose(leds, num_led_per_strip, num_strips, _offsetDisplay, (uint16_t *)DMABuffersTransposed[j + 1]->buffer, j, __green_map, __red_map, __blue_map, __white_map, nb_components, p_g, p_r, p_b);
             #else
-            loadAndTranspose(leds, stripSize, num_strips, (uint16_t *)DMABuffersTransposed[j+1]->buffer, j, __green_map, __red_map, __blue_map, __white_map, nb_components, p_g, p_r, p_b);
+            #ifdef ENABLE_LEDMAP
+            loadAndTranspose(leds, stripSize, num_strips, (uint16_t *)DMABuffersTransposed[j+1]->buffer, ledToDisplay, __green_map, __red_map, __blue_map, __white_map, nb_components, p_g, p_r, p_b, _offsetDisplay);
+            #else
+            loadAndTranspose(leds, stripSize, num_strips, (uint16_t *)DMABuffersTransposed[j+1]->buffer, ledToDisplay, __green_map, __red_map, __blue_map, __white_map, nb_components, p_g, p_r, p_b);
+            #endif
             #endif
         }
     }
 
-    void setPixelinBufferByStrip(int stripNumber,int posOnStrip,uint8_t red, uint8_t green, uint8_t blue)
+    void setPixelinBuffer(uint32_t pos, uint8_t red, uint8_t green, uint8_t blue, uint8_t white)
     {
-        uint8_t W = 0;
-        if (nb_components > 3)
-        {
-            W = MIN(red, green);
-            W = MIN(W, blue);
-            red = red - W;
-            green = green - W;
-            blue = blue - W;
-        }
-        setPixelinBufferByStrip(stripNumber,posOnStrip, red, green, blue, W);
-    }
+        uint32_t stripNumber = pos / num_led_per_strip;
+        uint32_t posOnStrip = pos % num_led_per_strip;
 
-    void setPixelinBufferByStrip(int stripNumber,int posOnStrip,uint8_t red, uint8_t green, uint8_t blue, uint8_t white)
-    {
         uint16_t mask = ~(1 << stripNumber);
+
         uint8_t colors[3];
         colors[p_g] = __green_map[green];
         colors[p_r] = __red_map[red];
@@ -617,35 +543,6 @@ public:
         }
     }
 
-    void setPixelinBuffer(uint32_t pos, uint8_t red, uint8_t green, uint8_t blue, uint8_t white)
-    {
-
-        int stripNumber=-1;
-        int total=0;
-        int posOnStrip =pos;
-        if (pos>total_leds-1)
-        {
-            printf("Position out of bound %d > %d\n",pos,total_leds-1);
-            return;
-        }
-        while(total<=pos)
-        {
-            stripNumber++;
-            total+=stripSize[stripNumber];
-        }
-        if(stripNumber>0)
-            {
-                posOnStrip=-total+pos+stripSize[stripNumber];
-            }
-        else
-        {
-            posOnStrip=pos;
-        }
-
-       setPixelinBufferByStrip(stripNumber,posOnStrip, red, green, blue, white);
-    }
-
-
     void setPixelinBuffer(uint32_t pos, uint8_t red, uint8_t green, uint8_t blue)
     {
         uint8_t W = 0;
@@ -661,13 +558,12 @@ public:
         setPixelinBuffer(pos, red, green, blue, W);
     }
 
-    void initled(int *Pinsq, int num_strips, int num_led_per_strip)
+    void initled(int *Pinsq, int num_strips, int num_led_per_strip, colorarrangment cArr)
     {
-        initled(NULL, Pinsq, num_strips, num_led_per_strip);
+        initled(NULL, Pinsq, num_strips, num_led_per_strip, cArr);
     }
     void waitSync()
     {
-        I2SClocklessLedDriver_semSync=xSemaphoreCreateBinary();
         xSemaphoreTake(I2SClocklessLedDriver_semSync, portMAX_DELAY);
     }
 #endif
@@ -713,18 +609,14 @@ public:
         return _defaultOffsetDisplay;
     }
 
-    void showPixels(uint8_t *new_leds, OffsetDisplay offdisp)
+    void showPixels()
     {
-        _offsetDisplay = offdisp;
-        showPixels(new_leds);
-        _offsetDisplay = _defaultOffsetDisplay;
+        showPixels(_defaultLeds, _offsetDisplay);
     }
 
     void showPixels(OffsetDisplay offdisp)
     {
-        _offsetDisplay = offdisp;
-        showPixels();
-        _offsetDisplay = _defaultOffsetDisplay;
+        showPixels(_defaultLeds, offdisp);
     }
 
     /*
@@ -752,61 +644,29 @@ Show pixels classiques
 */
     void showPixels(uint8_t *newleds)
     {
-       // uint8_t *tmp_leds;
-        //tmp_leds = leds;
-       // leds = newleds;
-        showPixels(WAIT,newleds);
-     //   leds = tmp_leds;
+         showPixels(newleds, _offsetDisplay);
     }
-
-    void showPixels()
-    {
-        showPixels(WAIT);
-    }
-
     
-        void showPixels(displayMode dispmode,uint8_t *newleds)
+    void showPixels(uint8_t *newleds, OffsetDisplay offdisp)
     {
-        //uint8_t *tmp_leds;
-        //tmp_leds = leds;
-         if(isDisplaying == true and __displayMode==NO_WAIT)
-         {
-            //printf("dejà en cours on attend\n");
-            //long t1=ESP.getCycleCount();
-            wasWaitingtofinish = true;
-            if(I2SClocklessLedDriver_semDisp==NULL)
-                I2SClocklessLedDriver_semDisp = xSemaphoreCreateBinary();
-                const TickType_t xDelay = 50 ; //to avoid full blocking
-            xSemaphoreTake(I2SClocklessLedDriver_semDisp, xDelay);
-            //printf("on retourne %ld\n",(ESP.getCycleCount()-t1)/240000);
-         }
+        waitUntilDone();
+        _offsetDisplay = offdisp;
         leds = newleds;
-        showPixels(dispmode);
-        //leds = tmp_leds;
-    }
-
-    void showPixels(displayMode dispmode)
-    {
-
- if (dispmode == NO_WAIT && isDisplaying == true)
-            {
-                //printf("deja display\n");
-                //return;
-                wasWaitingtofinish = true;
-                if(I2SClocklessLedDriver_semDisp==NULL)
-                    I2SClocklessLedDriver_semDisp = xSemaphoreCreateBinary();
-                    const TickType_t xDelay = 50 ; //to avoid full blocking
-                xSemaphoreTake(I2SClocklessLedDriver_semDisp, xDelay);
-                //printf("one re\n");
-            }
-
+        #ifdef ENABLE_LEDMAP
+        // _offsetDisplay.offsetx = MOD(_offsetDisplay.offsetx, PANEL_WIDTH * NUM_PANELS_PER_ROW);
+        // _offsetDisplay.offsety = MOD(_offsetDisplay.offsety, PANEL_HEIGHT * NUM_PANELS_PER_COLUMN);
+        // if (_offsetDisplay.offsetx < 0) _offsetDisplay.offsetx += (INT_MAX / (_offsetDisplay.panel_width)) * (_offsetDisplay.panel_width);
+        // if (_offsetDisplay.offsety < 0) _offsetDisplay.offsety += (INT_MAX / (_offsetDisplay.panel_height)) * (_offsetDisplay.panel_height);
+        if (_offsetDisplay.offsetx < 0) _offsetDisplay.offsetx -= (_offsetDisplay.offsetx / _offsetDisplay.panel_width - 1) * _offsetDisplay.panel_width;
+        if (_offsetDisplay.offsety < 0) _offsetDisplay.offsety -= (_offsetDisplay.offsety / _offsetDisplay.panel_height - 1) * _offsetDisplay.panel_height;
+        #endif
         #if HARDWARESPRITES == 1
         memset(target, 0, num_led_per_strip * num_strips  * 2);
         for (int i = 0; i < 8; i++)
         {
             sprites[i].reorder(_offsetDisplay.panel_width, _offsetDisplay.panel_height);
         }
-        #endif
+#endif
         if (leds == NULL)
         {
             ESP_LOGE(TAG, "no leds buffer defined");
@@ -822,40 +682,22 @@ Show pixels classiques
         #ifdef ENABLE_HARDWARE_SCROLL
         loadAndTranspose(leds, num_led_per_strip, num_strips, _offsetDisplay, (uint16_t *)DMABuffersTampon[0]->buffer, ledToDisplay, __green_map, __red_map, __blue_map, __white_map, nb_components, p_g, p_r, p_b);
         #else
+        #ifdef ENABLE_LEDMAP
+        loadAndTranspose(leds, stripSize, num_strips, (uint16_t *)DMABuffersTampon[0]->buffer, ledToDisplay, __green_map, __red_map, __blue_map, __white_map, nb_components, p_g, p_r, p_b, _offsetDisplay);
+        #else
         loadAndTranspose(leds, stripSize, num_strips, (uint16_t *)DMABuffersTampon[0]->buffer, ledToDisplay, __green_map, __red_map, __blue_map, __white_map, nb_components, p_g, p_r, p_b);
+        #endif
         #endif
         dmaBufferActive = 1;
         i2sStart(DMABuffersTampon[2]);
-        isDisplaying=true;
-        if (dispmode == WAIT)
-        {
-            isWaiting = true;
-            if (I2SClocklessLedDriver_sem==NULL)
-            I2SClocklessLedDriver_sem=xSemaphoreCreateBinary();
-            xSemaphoreTake(I2SClocklessLedDriver_sem, portMAX_DELAY);
-        }
-        else
-        {
-            isWaiting = false;
-        }
-        __displayMode=dispmode;
-        //isWaiting = true;
-        //I2SClocklessLedDriver_sem=xSemaphoreCreateBinary();
-        //xSemaphoreTake(I2SClocklessLedDriver_sem, portMAX_DELAY);
+        isWaiting = true;
+        if (__displayMode != NO_WAIT) waitUntilDone();
     }
-
-
-    Pixel * strip(int stripNum)
+    
+    void waitUntilDone()
     {
-        Pixel * l =(Pixel *)leds;
-        //Serial.printf(" strip %d\n",stripNum);
-
-        for(int i=0;i< (stripNum % num_strips);i++)
-        {
-             //Serial.printf("     strip %d\n",stripSize[i]);
-            l=l+stripSize[i];
-        }
-        return l;
+        if (isDisplaying == true) xSemaphoreTake(I2SClocklessLedDriver_sem, portMAX_DELAY);
+        else if (uxSemaphoreGetCount(I2SClocklessLedDriver_sem) > 0) xSemaphoreTake(I2SClocklessLedDriver_sem, portMAX_DELAY);
     }
 
     int maxLength(int *sizes,int num_strips)
@@ -871,51 +713,29 @@ Show pixels classiques
             return max;
     }
 
-#ifdef USE_PIXELSLIB
-    void initled(Pixels pix,int *Pinsq)
-    { 
-        initled((uint8_t *)pix.getPixels(),Pinsq,pix.getLengths(), pix.getNumStrip());
-    }
-#endif
-    void initled(uint8_t *leds, int *Pinsq, int *sizes,  int num_strips)
+    void initled(uint8_t *leds, int *Pinsq, int *sizes,  int num_strips,colorarrangment cArr)
     {
-        total_leds=0;
         for(int i=0;i<num_strips;i++)
         {
             this->stripSize[i]=sizes[i];
-            total_leds+=sizes[i];
         }
         int maximum= maxLength( sizes,num_strips);
-        //Serial.printf("maximum %d\n",maximum);
-         ESP_LOGE(TAG, "maximum %d\n",maximum);
-        nb_components = _nb_components;
-        p_r = _p_r;
-        p_g = _p_g;
-        p_b = _p_b;
-          __initled(leds, Pinsq, num_strips, maximum);
+          __initled(leds, Pinsq, num_strips, maximum, cArr);
     }
 
-    void initled(uint8_t *leds, int *Pinsq, int num_strips, int num_led_per_strip)
+    void initled(uint8_t *leds, int *Pinsq, int num_strips, int num_led_per_strip, colorarrangment cArr)
     {
          for(int i=0;i<num_strips;i++)
         {
             this->stripSize[i]=num_led_per_strip;
         }
-        initled(leds, Pinsq,this->stripSize, num_strips);
+        __initled(leds, Pinsq, num_strips, num_led_per_strip, cArr);
     }
 
 
-    void initled(uint8_t *leds, int *Pinsq, int *sizes,  int num_strips,colorarrangment cArr)
+    void __initled(uint8_t *leds, int *Pinsq, int num_strips, int num_led_per_strip,colorarrangment cArr)
     {
-        total_leds=0;
-        for(int i=0;i<num_strips;i++)
-        {
-            this->stripSize[i]=sizes[i];
-            total_leds+=sizes[i];
-        }
-        int maximum= maxLength( sizes,num_strips);
 
-           
         switch (cArr)
         {
         case ORDER_RGB:
@@ -961,27 +781,6 @@ Show pixels classiques
             p_b = 2;
             break;
         }
-          __initled(leds, Pinsq, num_strips, maximum);
-    }
-
-    void initled(uint8_t *leds, int *Pinsq, int num_strips, int num_led_per_strip,colorarrangment cArr)
-    {
-         for(int i=0;i<num_strips;i++)
-        {
-            this->stripSize[i]=num_led_per_strip;
-        }
-        initled(leds, Pinsq,this->stripSize, num_strips,cArr);
-    }
-
-/*
-*
-*
-*
-*
-*/
-
-    void __initled(uint8_t *leds, int *Pinsq, int num_strips, int num_led_per_strip)
-    {
         _gammab = 1;
         _gammar = 1;
         _gammag = 1;
@@ -994,7 +793,7 @@ Show pixels classiques
         setBrightness(255);
         dmaBufferCount = 2;
         this->leds = leds;
-        this->saveleds = leds;
+        this->_defaultLeds = leds;
         this->num_led_per_strip = num_led_per_strip;
         _offsetDisplay.offsetx = 0;
         _offsetDisplay.offsety = 0;
@@ -1067,32 +866,19 @@ Show pixels classiques
     void IRAM_ATTR i2sStop()
     {
 
-       
+        ets_delay_us(16);
 
-       // xSemaphoreGive(I2SClocklessLedDriver_semDisp);
+        xSemaphoreGive(I2SClocklessLedDriver_semDisp);
         esp_intr_disable(_gI2SClocklessDriver_intr_handle);
         i2sReset();
 
         (&I2S0)->conf.tx_start = 0;
-        while( (&I2S0)->conf.tx_start ==1){}
-         ets_delay_us(30);
-       // isDisplaying = false;
+        isDisplaying = false;
         /*
          We have finished to display the strips
          */
 
         //xSemaphoreGive(I2SClocklessLedDriver_semDisp);
-        if( __displayMode == NO_WAIT && wasWaitingtofinish == true)
-        {
-            // REG_WRITE(I2S_INT_CLR_REG(0), (REG_READ(I2S_INT_RAW_REG(0)) & 0xffffffc0) | 0x3f);
-         //portBASE_TYPE HPTaskAwoken = 0;
-               
-               wasWaitingtofinish = false;
-                  xSemaphoreGive(I2SClocklessLedDriver_semDisp);
-                 
-        }
-    isDisplaying =false;
-        leds=saveleds;
     }
 
     void putdefaultones(uint16_t *buffer)
@@ -1212,11 +998,15 @@ static void IRAM_ATTR _I2SClocklessLedDriverinterruptHandler(void *arg)
             {
                 #ifdef ENABLE_HARDWARE_SCROLL
                 loadAndTranspose(cont->leds, cont->num_led_per_strip, cont->num_strips, cont->_offsetDisplay, (uint16_t *)cont->DMABuffersTampon[cont->dmaBufferActive]->buffer, cont->ledToDisplay, cont->__green_map, cont->__red_map, cont->__blue_map, cont->__white_map, cont->nb_components, cont->p_g, cont->p_r, cont->p_b);
-               #else
-               loadAndTranspose(cont->leds, cont->stripSize, cont->num_strips, (uint16_t *)cont->DMABuffersTampon[cont->dmaBufferActive]->buffer, cont->ledToDisplay, cont->__green_map, cont->__red_map, cont->__blue_map, cont->__white_map, cont->nb_components, cont->p_g, cont->p_r, cont->p_b);
-               #endif
+                #else
+                #ifdef ENABLE_LEDMAP
+                loadAndTranspose(cont->leds, cont->stripSize, cont->num_strips, (uint16_t *)cont->DMABuffersTampon[cont->dmaBufferActive]->buffer, cont->ledToDisplay, cont->__green_map, cont->__red_map, cont->__blue_map, cont->__white_map, cont->nb_components, cont->p_g, cont->p_r, cont->p_b, cont->_offsetDisplay);
+                #else
+                loadAndTranspose(cont->leds, cont->stripSize, cont->num_strips, (uint16_t *)cont->DMABuffersTampon[cont->dmaBufferActive]->buffer, cont->ledToDisplay, cont->__green_map, cont->__red_map, cont->__blue_map, cont->__white_map, cont->nb_components, cont->p_g, cont->p_r, cont->p_b);
+                #endif                
+                #endif
 
-               if (cont->ledToDisplay == cont->num_led_per_strip - 3) //here it's not -1 because it takes time top have the change into account and it reread the buufer
+                if (cont->ledToDisplay == cont->num_led_per_strip - 3) //here it's not -1 because it takes time top have the change into account and it reread the buufer
                 {
                     cont->DMABuffersTampon[cont->dmaBufferActive]->descriptor.qe.stqe_next = &(cont->DMABuffersTampon[3]->descriptor);
                 }
@@ -1238,25 +1028,16 @@ static void IRAM_ATTR _I2SClocklessLedDriverinterruptHandler(void *arg)
     if (GET_PERI_REG_BITS(I2S_INT_ST_REG(I2S_DEVICE), I2S_OUT_TOTAL_EOF_INT_ST_V, I2S_OUT_TOTAL_EOF_INT_ST_S))
     {
 
-             
-                 
+        //        portBASE_TYPE HPTaskAwoken = 0;
+        //            xSemaphoreGiveFromISR(((I2SClocklessLedDriver *)arg)->I2SClocklessLedDriver_semDisp, &HPTaskAwoken);
+        //            if(HPTaskAwoken == pdTRUE) portYIELD_FROM_ISR();
         ((I2SClocklessLedDriver *)arg)->i2sStop();
-        /*
-        if( cont->__displayMode == NO_WAIT && cont->wasWaitingtofinish == true)
-        {
-            // REG_WRITE(I2S_INT_CLR_REG(0), (REG_READ(I2S_INT_RAW_REG(0)) & 0xffffffc0) | 0x3f);
-         portBASE_TYPE HPTaskAwoken = 0;
-               cont->isDisplaying =false;
-               cont->wasWaitingtofinish = false;
-                  xSemaphoreGiveFromISR(((I2SClocklessLedDriver *)arg)->I2SClocklessLedDriver_semDisp, &HPTaskAwoken);
-                  if(HPTaskAwoken == pdTRUE) portYIELD_FROM_ISR(HPTaskAwoken);
-        }*/
         if (cont->isWaiting)
         {
             portBASE_TYPE HPTaskAwoken = 0;
             xSemaphoreGiveFromISR(cont->I2SClocklessLedDriver_sem, &HPTaskAwoken);
             if (HPTaskAwoken == pdTRUE)
-                portYIELD_FROM_ISR(HPTaskAwoken);
+                portYIELD_FROM_ISR();
         }
     }
     REG_WRITE(I2S_INT_CLR_REG(0), (REG_READ(I2S_INT_RAW_REG(0)) & 0xffffffc0) | 0x3f);
@@ -1464,23 +1245,67 @@ static void IRAM_ATTR loadAndTranspose(uint8_t *ledt, int led_per_strip, int num
 }
 
 #else
-static void IRAM_ATTR loadAndTranspose(uint8_t *ledt, int *sizes, int num_stripst, uint16_t *buffer, int ledtodisp, uint8_t *mapg, uint8_t *mapr, uint8_t *mapb, uint8_t *mapw, int nbcomponents, int pg, int pr, int pb)
+#ifdef ENABLE_LEDMAP
+static Coordinates IRAM_ATTR mapLed(int hardwareLed)
+{
+  Coordinates coordinates;
+  // = MOD(FLOOR(A11 / 4), 12)
+  coordinates.x = (hardwareLed / PANEL_HEIGHT) % (PANEL_WIDTH * NUM_PANELS_PER_ROW);
+  // = MOD(MOD(FLOOR(A11 / 4) + 1, 2) * MOD(A11, 4) + MOD(FLOOR(A11 / 4), 2) * MOD(95 - A11, 4) + FLOOR(A11 / 48) * 4, 96)
+  coordinates.y = (hardwareLed / PANEL_HEIGHT) % 2;
+  if (coordinates.y == 0)
+  {
+    coordinates.y = (hardwareLed % PANEL_HEIGHT) + (hardwareLed / (PANEL_WIDTH * PANEL_HEIGHT * NUM_PANELS_PER_ROW)) * PANEL_HEIGHT;
+    // coordinates.y = ((hardwareLed % PANEL_HEIGHT) + (hardwareLed / (PANEL_WIDTH * NUM_PANELS_PER_ROW)) * PANEL_HEIGHT) % (PANEL_WIDTH * NUM_PANELS_PER_ROW * NUM_PANELS_PER_COLUMN);
+  }
+  else
+  {
+    coordinates.y = ((PANEL_HEIGHT * 12345 - 1 - hardwareLed) % PANEL_HEIGHT) + (hardwareLed / (PANEL_WIDTH * PANEL_HEIGHT * NUM_PANELS_PER_ROW)) * PANEL_HEIGHT;
+    // coordinates.y = (((PANEL_HEIGHT * 12345 - 1 - hardwareLed) % PANEL_HEIGHT) + (hardwareLed / (PANEL_WIDTH * NUM_PANELS_PER_ROW)) * PANEL_HEIGHT) % (PANEL_WIDTH * NUM_PANELS_PER_ROW * NUM_PANELS_PER_COLUMN);
+  }
+  // coordinates.y = (((hardwareLed / 16 + 1) % 2) * (hardwareLed % 16) + ((hardwareLed / 16) % 2) * ((16 * 123 - 1 - hardwareLed) % 16) + (hardwareLed / (16 * 7)) * 16 ) % (16 * 7 * 2);
+  return coordinates;
+}
+
+static void IRAM_ATTR loadAndTranspose(uint8_t *ledt, int *sizes, int num_stripst, uint16_t *buffer, int ledtodisp, uint8_t *mapg, uint8_t *mapr, uint8_t *mapb, uint8_t *mapw, int nbcomponents, int pg, int pr, int pb, OffsetDisplay offdisp)
 {
     Lines secondPixel[nbcomponents];
-
-    memset(secondPixel,0,sizeof(secondPixel));
-    uint8_t *poli = ledt + ledtodisp * nbcomponents;
+    int currentLed = ledtodisp;
     for (int i = 0; i < num_stripst; i++)
     {
-        if(ledtodisp < sizes[i])
-        {
+        Coordinates coordinates = mapLed(currentLed);
+        coordinates.x = (coordinates.x + offdisp.offsetx) % offdisp.panel_width;
+        coordinates.y = (coordinates.y + offdisp.offsety) % offdisp.panel_height;
+        uint8_t *poli = ledt + coordinates.x * nbcomponents + coordinates.y * offdisp.panel_width * nbcomponents;
         secondPixel[pg].bytes[i] = mapg[*(poli + 1)];
         secondPixel[pr].bytes[i] = mapr[*(poli + 0)];
         secondPixel[pb].bytes[i] = mapb[*(poli + 2)];
         if (nbcomponents > 3)
             secondPixel[3].bytes[i] = mapw[*(poli + 3)];
-        }
-        
+
+        currentLed += sizes[i];
+    }
+
+    transpose16x1_noinline2(secondPixel[0].bytes, (uint16_t *)buffer);
+    transpose16x1_noinline2(secondPixel[1].bytes, (uint16_t *)buffer + 3 * 8);
+    transpose16x1_noinline2(secondPixel[2].bytes, (uint16_t *)buffer + 2 * 3 * 8);
+    if (nbcomponents > 3)
+        transpose16x1_noinline2(secondPixel[3].bytes, (uint16_t *)buffer + 3 * 3 * 8);
+}
+#else
+static void IRAM_ATTR loadAndTranspose(uint8_t *ledt, int *sizes, int num_stripst, uint16_t *buffer, int ledtodisp, uint8_t *mapg, uint8_t *mapr, uint8_t *mapb, uint8_t *mapw, int nbcomponents, int pg, int pr, int pb)
+{
+    Lines secondPixel[nbcomponents];
+
+    uint8_t *poli = ledt + ledtodisp * nbcomponents;
+    for (int i = 0; i < num_stripst; i++)
+    {
+
+        secondPixel[pg].bytes[i] = mapg[*(poli + 1)];
+        secondPixel[pr].bytes[i] = mapr[*(poli + 0)];
+        secondPixel[pb].bytes[i] = mapb[*(poli + 2)];
+        if (nbcomponents > 3)
+            secondPixel[3].bytes[i] = mapw[*(poli + 3)];
 
         poli += sizes[i]* nbcomponents;
     }
@@ -1492,5 +1317,5 @@ static void IRAM_ATTR loadAndTranspose(uint8_t *ledt, int *sizes, int num_strips
         transpose16x1_noinline2(secondPixel[3].bytes, (uint16_t *)buffer + 3 * 3 * 8);
 }
 #endif
-
 #endif
+
