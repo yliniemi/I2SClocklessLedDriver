@@ -27,7 +27,7 @@
 #include <stdio.h>
 #include <rom/ets_sys.h>
 #include "esp32-hal-log.h"
-#include "Math.h"
+#include "math.h"
 
 
 
@@ -256,13 +256,17 @@ public:
     int i2s_base_pin_index;
     int nb_components;
     int stripSize[16];
-    uint16_t (*mapLed)(int);
-    void setMapLed(uint16_t (*newMapLed)(int))
+    int (*mapLed)(int) = [](int i) { return i; };
+    
+    void setMapLed(int (*newMapLed)(int))
     {
+      Serial.printf("old mapLed = %u\n", (uint32_t)mapLed);
       mapLed = newMapLed;
+      Serial.printf("new mapLed = %u\n", (uint32_t)mapLed);
     }
+    
     #ifdef __HARDWARE_MAP
-        uint16_t * _hmap;
+    uint16_t * _hmap;
     #endif
     /*
      This flag is used when using the NO_WAIT modeÒÒ
@@ -770,6 +774,13 @@ Show pixel circular
     /*
 Show pixels classiques
 */
+    void waitUntilDone()
+    {
+        if (isDisplaying == true) xSemaphoreTake(I2SClocklessLedDriver_sem, portMAX_DELAY);
+        else if (uxSemaphoreGetCount(I2SClocklessLedDriver_sem) > 0) xSemaphoreTake(I2SClocklessLedDriver_sem, portMAX_DELAY);
+    }
+    
+    
     void showPixels(uint8_t *newleds)
     {
        // uint8_t *tmp_leds;
@@ -1009,30 +1020,26 @@ Show pixels classiques
         _gammag = 1;
         _gammaw = 1;
         startleds = 0;
-#if HARDWARESPRITES == 1
+    #if HARDWARESPRITES == 1
         //Serial.println(NUM_LEDS_PER_STRIP * NBIS2SERIALPINS * 8);
         target = (uint16_t *)malloc(num_led_per_strip * num_strips * 2 + 2);
-#endif
-
-#ifdef __HARDWARE_MAP
-Serial.printf("jksdfd\n");
-    _hmap=(uint16_t *)malloc(num_led_per_strip * num_strips * 2);
+    #endif
+    
+    #ifdef __HARDWARE_MAP
+    Serial.printf("total_leds = %d\n", total_leds);
+    _hmap=(uint16_t *)malloc(total_leds * 2);
     if(!_hmap)
     {
         Serial.printf("no memory\n");
     }
     else
     {
-        for(int leddisp=0;leddisp<num_led_per_strip;leddisp++)
+        for (int i = 0; i < total_leds; i++)
         {
-            for (int i = 0; i < num_strips; i++)
-            {
-                _hmap[i+leddisp*num_strips]=mapLed(leddisp+i*num_led_per_strip);
-            }
+            _hmap[i] = mapLed(i);
         }
     }
-    Serial.printf("jksdfd\n");
-#endif
+    #endif
         setBrightness(255);
         dmaBufferCount = 2;
         this->leds = leds;
@@ -1302,7 +1309,8 @@ static void IRAM_ATTR _I2SClocklessLedDriverinterruptHandler(void *arg)
             portBASE_TYPE HPTaskAwoken = 0;
             xSemaphoreGiveFromISR(cont->I2SClocklessLedDriver_sem, &HPTaskAwoken);
             if (HPTaskAwoken == pdTRUE)
-                portYIELD_FROM_ISR(HPTaskAwoken);
+                // portYIELD_FROM_ISR(HPTaskAwoken);
+                portYIELD_FROM_ISR();
         }
     }
     REG_WRITE(I2S_INT_CLR_REG(0), (REG_READ(I2S_INT_RAW_REG(0)) & 0xffffffc0) | 0x3f);
@@ -1518,9 +1526,11 @@ static void IRAM_ATTR loadAndTranspose(I2SClocklessLedDriver *driver)//uint8_t *
     Lines secondPixel[nbcomponents];
     uint16_t *buffer=(uint16_t *)driver->DMABuffersTampon[driver->dmaBufferActive]->buffer;
     uint16_t led_tmp=driver->ledToDisplay;
+    /*
     #ifdef __HARDWARE_MAP
         led_tmp=driver->ledToDisplay*driver->num_strips;
     #endif
+    */
     memset(secondPixel,0,sizeof(secondPixel));
     #ifdef _LEDMAPPING
         //#ifdef __SOFTWARE_MAP
@@ -1536,7 +1546,7 @@ static void IRAM_ATTR loadAndTranspose(I2SClocklessLedDriver *driver)//uint8_t *
             poli = driver->leds + driver->mapLed(led_tmp) * nbcomponents;
             #endif
             #ifdef __HARDWARE_MAP
-                poli = driver->leds + driver->_hmap[led_tmp+i] * nbcomponents;
+            poli = driver->leds + driver->_hmap[led_tmp] * nbcomponents;
             #endif
         #endif
         if(driver->ledToDisplay < driver->stripSize[i])
@@ -1547,10 +1557,8 @@ static void IRAM_ATTR loadAndTranspose(I2SClocklessLedDriver *driver)//uint8_t *
         if (nbcomponents > 3)
             secondPixel[3].bytes[i] = driver->__white_map[*(poli + 3)];
         }
-      #ifdef _LEDMAPPING
-            #ifdef __SOFTWARE_MAP
-                led_tmp+=driver->stripSize[i];
-            #endif
+        #ifdef _LEDMAPPING
+        led_tmp+=driver->stripSize[i];
         #else
          poli += driver->stripSize[i]* nbcomponents;
         #endif
